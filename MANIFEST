@@ -1,12 +1,11 @@
-Makefile.PL
 lib/Fry/Lib/CDBI/Basic.pm
-lib/Fry/Lib/CDBI/BDBI.pm
+lib/Fry/Lib/CDBI/Load.pm
+lib/Fry/Lib/CDBI/Outline.pm
+lib/Fry/Lib/CDBI/Tags.pm
+Changes
 MANIFEST
 Makefile.PL
 README
-samples/cdbi.pl
-t/basic.t
-t/bdbi.t
-t/testlib/Bmark.pm
-t/testlib/PgBase.pm
+t/cdbi.t
+t/pod.t
 META.yml                                 Module meta-data (added by MakeMaker)

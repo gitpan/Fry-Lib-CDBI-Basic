@@ -1,75 +1,92 @@
-#!/usr/bin/perl
-#importing
 package Fry::Lib::CDBI::Basic;
-	use base 'Class::Data::Global';
-	use strict qw/vars refs/; #?forget the subs cause makes hash assignment a pain
-	our $VERSION='0.05';
-#variables
-	#global
-	#private	
-	my $sql_count;
+use strict;
+
+our $VERSION='0.15';
+my $sql_count;
+#our $cdbi_search = "search_abstract";
+#other possible values are cdbi_search,cdbi_regex and cdbi_search_like
 
 #functions
-	sub _init_lib {
-		my $class = shift;
-
-		$class->_flag->{safe_update} = 1;
-
-		my $abstract_operator = (exists $class->_db_default->{$class->db}->{regex}) ?
-		$class->_db_default->{$class->db}->{regex} : "like";
-		$class->_abstract_opts->{cmp} = $abstract_operator;
-	}	
 	sub _default_data {
 		my $class = shift;
 		
 		return {
-			depend=>['CDBI::BDBI'],
-			global=>{
-				_print_mode=>'n',
-				_editor=>$ENV{EDITOR},
-				_default_splitter=>'===',
-				_splitter=>'=',
-				_abstract_opts=>{logic=>'and'},
-				_alias_print=> {qw/n print2darr t print_text_table/},
-				_delim=>{tag=>',',display=>',,',insert=>',,'},
-				_default_search=>'search_like',
-				#_pager=>$ENV{PAGER},
-			},	
-			alias=>{
-				cmds=>{	
-					qw/s cdbi_select i cdbi_insert U cdbi_update d cdbi_delete
-					pc printcol r replace :x execute :s display_obj :U update_obj
-					\sl set_dbi_log_level \cl clear_dbi_log \pl print_dbi_log
-					:d delete_obj V verify_no_delim/,
-				},
-				subs=>{qw/c setcol/},
-				vars=>{ qw/t tb d db D dbname P _print_mode/},
-				flags=>{qw/j join S safe_update/}
+			depend=>[':CDBI::Load'],
+			vars=>{
+				editor=>$ENV{EDITOR},
+				splitter=>'=',
+				insert_columns=>'',
+				abstract_opts=>{logic=>'and'},
+				insert_delimiter=>',,',
+				cdbi_search=>'search_abstract',
+				#flags
+				safe_update=>1,
+				only_modified=>1,
 			},
-			help=>{
-				printcol=>{d=>'prints the columns of the current table',u=>''},
-				set_db_log_level=>
-					{d=>'sets the log level of DBI handle',u=>'$number'},
-				print_dbi_log=>{d=>'prints the current DBI log',u=>''},
-				clear_dbi_log=>{d=>'clears the dbi log',u=>''},
-				cdbi_insert=>
-					{d=>'inserts record',u=>'($value$delimiter)+'},
-				cdbi_select=> {d=>'prints results of a query',
-					u=>'($column$splitter<$operator>$column_value)+'},
-				cdbi_delete=> {d=>'deletes results of given query',
-					u=>'($column$splitter<$operator>$column_value)+'},
-				cdbi_update=>{d=>'updates records via a text editor',
-					u=>'($column$splitter<$operator>$column_value)+'},
-				replace=>{d=>'evals each value of each result row with $operation',
-					u=>'($column$splitter<$operator>$column_value)+ $operation'},
-			}
-		}	
+			subs=>{parseHash=>{qw/a h/},parseHashref=>{qw/a hr/},
+				printTextTable=>{qw/a tt/}
+				#search=>{sub=>'search'},search_like=>{}
+			},
+			cmds=>{
+				print_columns=>{a=>'pc',d=>'Prints columns of current table',u=>''},
+				search_abstract=>{a=>'s',aa=>\&aliasInputAndSql,
+					d=>'Search for results via AbstractSearch'
+					,u=>'@search_term'},
+				cdbi_search=>{a=>'sn',aa=>\&aliasInputAndSql,u=>'@search_term'},
+				cdbi_search_like=>{a=>'sl',aa=>\&aliasInputAndSql,u=>'@search_term'},
+				cdbi_search_regex=>{a=>'sr',aa=>\&aliasInputAndSql,u=>'@search_term'},
+				cdbi_delete=>{a=>'d',aa=>\&aliasInputAndSql,
+					d=>'Deletes results of given query',u=>'@search_term'},
+				cdbi_create=>{a=>'i',aa=>\&aliasInsert, d=>"Creates a record",
+					u=>'($value$delim)+'},
+				cdbi_find_or_create=>{a=>'fc',aa=>\&aliasInputAndSql, d=>"Find or create a record",
+					u=>'@search_term'},
+				cdbi_multi_insert=>{a=>'mi',arg=>'$file',u=>'$file'},
+				cdbi_update=>{a=>'U',aa=>\&aliasInputAndSql, d=>'Updates records via a text editor',
+					u=>'@search_term'},
+				replace=>{d=>'evals each value of each result row with $operation', a=>'r',
+					u=>'@search_term$operation'},
+				cdbi_delete_obj=>{a=>':d',u=>'@cdbi'},
+				cdbi_update_obj=>{a=>':U',u=>'@cdbi'},
+				verify_no_delim=>{a=>'V',aa=>\&aliasInputAndSql, u=>'@cdbi',
+					d=>"Verify that specified records don't have display delimiter in them"},
+				display_table_list=>{qw/a dpt/, d=>'Displays public tables',u=>''},
+				print_dbi_log=>{a=>'dpl',d=>'Prints the current DBI log',u=>''},
+				clear_dbi_log=>{d=>'Clears the dbi log',u=>'',a=>'dcl',u=>''},
+				set_dbi_log_level=>{a=>'dsl',d=>'Sets the log level of a DBI handler',
+					u=>'$num'},
+			},
+			opts=>{cdbi_search=>{qw/a cs type var noreset 1 default cdbi_search_regex/ }}
+			#retrieve_all retrieve/],
+			#construct,has*,trigger,constrain_column,set_sql
+			#}
+			#subs=>{aliasInputAndSql=>{}},
+			#td: obj-$result(autoupdate,update,delete,set/get,copy,discard_changes,is_changed),$iterator,$col,$relation
+		}
 	}	
+	sub _initLib {
+		my $cls = shift;
+		$cls->_set_insert_col;
+		$cls->Var('abstract_opts')->{cmp} =  $cls->_regex_operator;
+
+		#ugly, should be in _default_data
+		$cls->call(var=>'set','cdbi_search',enum=>[qw/cdbi_search cdbi_search_like cdbi_search_regex search_abstract/]);
+	       	$cls->call(var=>'set','cdbi_search',default=>'cdbi_search_regex');
+	}
 	#note for library use outside of shell
 	#this module depends on external subs: &parse_num
 
-	#utils
+	##utils
+	sub uniqueInArrays {
+		my ($cls,$uniq,$array2) =@_; 
+		my (@unique,%seen,$i,@num);
+		
+		for (@$array2) {$seen{$_}++}
+		for (@$uniq) { $i++; do {push(@unique,$_);push(@num,$i) } if (! exists $seen{$_}) }
+		return (\@unique,\@num);
+	}
 	sub file2array {
+		shift;
 		#local function
 		#d:converts file to @ of lines
 		open(FILE,"< $_[0]");
@@ -77,51 +94,66 @@ package Fry::Lib::CDBI::Basic;
 		close FILE;
 		return @lines;
 	} 
-	#internal functions
-	sub setcol {
-		my ($class,$choices) = @_;
-		my @newcol = $class->parse_num($choices,@{$class->cols});
-
-		#sets new columns
-		$class->printcols(\@newcol);
-	}
 	sub check_for_regex {
-		#d: could be used as an 'or' search on multiple columns
+		#d: AoHregexp, could be used as an 'or' search on multiple columns
 		my ($class,$regex,@records) = @_;
 		my @unclean;
 
 		for (@records) {
-			for my $col (@{$class->printcols}) {
+			for my $col (@{$class->Var('action_columns')}) {
 				if ($_->$col =~ /$regex/) {
 					push(@unclean,$_);
-					break;
-				}	
-			}		
-		}	
+					last; #break?
+				}
+			}
+		}
 		return @unclean;
 	}
+	#internal methods
+	sub _set_insert_col {
+		my $cls = shift;
+		#set insert_columns 
+		my @insert_columns = @{$cls->Var('columns')};
+		shift @insert_columns;
+		$cls->setVar(insert_columns=>\@insert_columns);
+
+	}	
+	sub regexChangeAoH {
+		my ($cls,$op,@records2update) = @_;
+		for my $rec (@records2update) {
+			for (my $j=0; $j < @{$cls->Var('action_columns')}; $j++) {
+				my $col= $cls->Var('action_columns')->[$j];
+				$_ = $rec->$col;
+				eval $op; die($@) if $@;
+				$rec->$col($_);
+			}
+		$rec->update;
+		}
+	}
 	sub modify_file {	
-		my ($class,$tempfile) = @_;
+		my ($cls,$tempfile) = @_;
 		my $inp;
 
-		system($class->_editor . " $tempfile");# or die "can't execute command as $<: $@";
+		system($cls->Var('editor') . " $tempfile");# or die "can't execute command as $<: $@";
 		#?: why does this system always return a fail code
-		print "cdbi_update (y/n)? "; chomp($inp = <STDIN>);
+		#$cls->view("cdbi_update (y/n)? "); chomp($inp = <STDIN>);
+		$inp = $cls->Rline->stdin("cdbi_update (y/n)?");
 		return ($inp eq "y");
 	}
 	sub update_from_file {
-		my ($class,$tempfile,@records) = @_;
+		my ($cls,$tempfile,@records) = @_;
 
-		my @lines = file2array($tempfile);
-		my $firstline = shift(@lines);
+		my @lines = $cls->file2array($tempfile);
+
+		#my $firstline = shift(@lines);
 		#read column order from file
 		#my @fields = split(/$updatedelim/,$firstline);
 		#or not
-		my @fields = @{$class->printcols};
+		my @fields = @{$cls->Var('action_columns')};
 
 		my $i;
 		foreach (@records) {		#each row to update
-			my @fvalues = split(/${\$class->_delim->{display}}/,$lines[$i]);
+			my @fvalues = split(/${\$cls->Var('field_delimiter')}/,$lines[$i]);
 			for (my $j=0; $j < @fields; $j++) {		#each column to update
 
 				my $temp=$fields[$j];
@@ -140,7 +172,7 @@ package Fry::Lib::CDBI::Basic;
 		for (@_) { 
 		#if (/c(\d+)=/) { my $col = $col[$1-1];s/c\d+/$col/} 
 		if (/c([-,\d]+)(.*)/) { 
-		my @tempcol = $class->parse_num($1,@{$class->cols});
+		my @tempcol = $class->sub->parseNum($1,@{$class->Var('columns')});
 			for my $eachcol (@tempcol) {  
 				push(@newterms,$eachcol.$2);
 			}
@@ -149,49 +181,27 @@ package Fry::Lib::CDBI::Basic;
 		}
 		return @newterms;
 	}
-	#print functions,input is objects
+#sub objects
+	##print functions,input is objects
 	sub printtofile {
 		#d:prints rows to temporary file
-		my ($class,$tempfile,@records) =  @_;
-		my $FH = "TEMP";
-		no strict 'refs';	#due to filehandle TEMP
+		my ($cls,$tempfile,@records) =  @_;
 
-		#write to file
-		open ($FH,"> $tempfile") or die "Couldn't open file: $@";
-		print $FH join($class->_delim->{display},@{$class->printcols})."\n";
-		$class->print2darr(\@records,$class->printcols,$FH);
-		close TEMP;
-
-		return $tempfile;
-	} 
-	sub print2darr { 
-		#d: prints a two dimensional table with objects as rows and object attributes as columns
-		#normal printing mode
-		my $class = shift;
-		my ($ref1,$ref2,$FH) = @_; my @row = @{$ref1}; my @columns = @{$ref2};
-		my $i;
-		no strict 'refs'; #due to TEMP symbol
-		
-		for (@row) {
-			#h:
-			if ($class->_flag->{menu}) {
-				$i++; print $FH "$i: "
-			}
-			for my $column (@columns) {
-				print $FH $_->$column;
-				print $FH $class->_delim->{display};
-			}
-			print $FH "\n";
-		}
+		my $output = join($cls->Var('field_delimiter'),@{$cls->Var('action_columns')})."\n";
+		$output .= $cls->View->objAoH_dt(\@records,$cls->Var('action_columns'));
+		$cls->View->file($tempfile,$output);
+	}
+	sub printTextTable {
+		my $cls = shift;
+		$cls->print_text_table(\@_,$cls->Var('action_columns'));
 	}
 	sub print_text_table {
-		my $class = shift;
-		my ($ref1,$ref2,$FH) = @_; my @row = @{$ref1}; my @columns = @{$ref2};
+		my $cls = shift;
+		my ($ref1,$ref2) = @_; my @row = @{$ref1}; my @columns = @{$ref2};
 		my (@column_values,@longest);
 
 		#defaul
-		eval { require Text::Reform}; die $@ if ($@);
-		#if ($@) {$class->($mode,\@row,\@columns,$FH) }
+		eval { use Text::Reform}; die $@ if ($@);
 
 		for my $column (@columns) {
 			my @column_value;
@@ -219,68 +229,93 @@ package Fry::Lib::CDBI::Basic;
 		#$picture_line .= "\n" . "-" x $line_length; 
 
 		#print column names
-		print form $picture_line,@columns;
+		$cls->view(form $picture_line,@columns);
 		#print body
-		print form $firstline,$picture_line, @column_values;
+		$cls->view(form $firstline,$picture_line, @column_values);
 	}
-	#parse functions,input is from commandine
-	sub inputalias {
+	sub print_horizontal_numbered_list {
+		my ($cls,$prompt,$list) = @_;
+		my $a;
+
+		my $output = $prompt; 
+		for (@$list){$a++;$output .= "$a.$_ " };
+	       	$output .= "\n";
+		$cls->view($output);
+	}	
+	##alias fns
+	sub cdbiDbh { shift->Var('table_class')->db_Main }
+	sub aliasInputAndSql { my $cls = shift; 
+		return $cls->aliasSqlAbstract($cls->aliasInput(@_)) }
+	sub aliasInput {
 		my $class =  shift;
-		@_ = $class->cols->[0].$class->_splitter.".*" if ($_[0] eq "a");  #all results given
+		@_ = $class->Var('columns')->[0].$class->Var('splitter').".*" if ($_[0] eq "a");  #all results given
 		@_ = $class->col2f1(@_) if ("@_" =~ /c[-,\d]+=/);	#c\d instead of column name
 		return @_;
 	}
-	sub parseinsert {
+	sub aliasInsert {
 		#d:parses userinput to hashref for &create
-		my $class = shift;
+		my $cls = shift;
 		my %chosenf;
-		die "Nothing given for cdbi_insert" if (not defined @_);
-		my @fields = split(/${\$class->_delim->{insert}}/,"@_");
-		my @insertcol = @{$class->insertcol};
+		#die "Nothing given for cdbi_insert" if (not defined @_);
+		my @fields = split(/${\$cls->Var('insert_delimiter')}/,"@_");
+		my @insert_columns = @{$cls->Var('insert_columns')};
 
-		for (my $i=0;$i< @insertcol;$i++) {
-			$chosenf{$insertcol[$i]} = $fields[$i];
-			print "$insertcol[$i] = $fields[$i]\n";
+		for (my $i=0;$i< @insert_columns;$i++) {
+			$chosenf{$insert_columns[$i]} = $fields[$i];
+			$cls->view("$insert_columns[$i] = $fields[$i]\n");
 		}
-		return %chosenf;
+		return \%chosenf;
 	} 
-	sub input_to_abstract {
+	sub aliasSqlAbstract {
 		#d:parse to feed to sql::abstract
 		#note: operators hardcoded for now	
 		my $class =  shift;
-		my %processf;
-		my $splitter = $class->_splitter;
+		my @processf;
+		my $splitter = $class->Var('splitter');
 
 		foreach (@_) {
 			if (/$splitter([>!<])=/) {
 				my $operator = $1;
 				my ($key,$value) = split(/=$operator=/);
-				$processf{$key} = {"$operator\=",$value};
+				push(@processf,$key,{"$operator\=",$value});
 			}	
 			elsif (/$splitter([><=])/) {
 				my $operator = $1;
 				my ($key,$value) = split (/$splitter$operator/);
-				$processf{$key} = {$operator,$value};
+				push(@processf,$key,{$operator,$value});
 			}	
 			#embedded sql
 			elsif (/$splitter(.*)$splitter/) {
 				my $literal_sql = $1;
 				$literal_sql =~ s/_/ /g;
 				my ($key,$dump) = split (/$splitter/);
-				$processf{$key} = \$literal_sql;
+				push(@processf,$key,\$literal_sql);
 			}	
 			#default operator
-			#elsif(/=/) {
+			#elsif(/=/) 
 			else {
 				my ($key,$value) = split(/$splitter/) or die "error splitting select";
-				$processf{$key} = $value;
+				push(@processf,$key,$value);
 			}	
 			#else { warn "no valid operator specified" };	
 		}
-		return %processf;
-	} 
-	sub parseselect {
-		#d:parses userinput to hashref for &search
+		return @processf;
+	}
+	##parse functions,input is from commandine
+	sub parseHash {
+		my ($cls,$input) = @_;
+
+		my @arg = split(/ /,$input);
+		my $cmd = shift @arg;
+		my %results = $cls->parseIndHash($cls->Var('splitter'),@arg);
+		return ($cmd,%results)
+	}
+	sub parseHashref {
+		my ($cls,$input) = @_;
+		my ($cmd,%results) = $cls->parseHash($input);
+		return ($cmd,\%results);
+	}
+	sub parseIndHash {
 		my ($class,$splitter,@chunks) =  @_;
 		my %processf;
 
@@ -289,176 +324,213 @@ package Fry::Lib::CDBI::Basic;
 			$processf{$key} = $value;
 		}	
 		return %processf;
-	}	
-	sub get_select {
+	}
+#commands
+	sub print_columns {
+		my $cls =  shift;
+		$cls->print_horizontal_numbered_list($cls->Var('table')."'s columns are ",$cls->Var('columns')); 
+	}
+	sub search_abstract {
 		#d:handles multiple parsing cases and returns search results 
-		my $class =  shift;
-		my @results;
+		my $cls =  shift;
+		if (@_ ==0 ) {warn("No arguments given to &search_abstract\n");return () }  
+		$cls->sub->_require('Class::DBI::AbstractSearch');
+		$cls->sub->useThere('Class::DBI::AbstractSearch',$cls->Var('table_class'));
 
-		eval {require Class::DBI::AbstractSearch};
-
-		#abstractsearch plugin failed or default_search purposely chosen
-		if ($@ or "@_" =~ /${\$class->_default_splitter}/) {
-
-			my %chosenf  = $class->parseselect($class->_default_splitter,@_);
-			@results =  $class->${\$class->_default_search}(%chosenf);
-		}	
-		else {
-			my %chosenf = $class->input_to_abstract(@_);
-			@results = $class->Class::DBI::AbstractSearch::search_where(\%chosenf,$class->_abstract_opts);
-		}	
+		#calling class determines class
+		my @results = $cls->Var('table_class')->Class::DBI::AbstractSearch::search_where(\@_,$cls->Var('abstract_opts'));
+		$cls->saveArray(@results) if ($cls->Flag('menu'));
 		return @results;
-	} 
-	#shell functions
-	sub print_dbi_log {
-		print shift->db_Main->{Profile}->format;
 	}
-	sub clear_dbi_log {
-		shift->db_Main->{Profile}->{Data}=undef;
-	}
-	sub set_dbi_log_level{
-		my ($class,$num) = @_;
-
-		if ($num > 15 or $num < -15) {
-			warn" given log level out of -15 to 15 range";
-		}	
-		else { $class->db_Main->{Profile} = $num; }
-	}	
-	sub printcol{
-		#d: prints a table's col
-		my $class =  shift;
-
-		print $class->tb."'s columns are "; my $a;
-		for (@{$class->cols}){$a++;print "$a.$_ " };print "\n"
-	}
-	sub cdbi_select {
-		#d:display select
-		my $class =  shift;
-
-		my @aliasedinput = $class->inputalias(@_);
-		my @results = $class->get_select(@aliasedinput);
-		$class->has_a(path_id=>$class) if ($class->_flag->{join});
-
-		#print results
-		#open (PAGER,"| ".$class->_fh);
-		#my $FH = ($class->_fh eq "STDOUT") ? "STDOUT" : "PAGER";
-		$class->${\$class->_alias_print->{$class->_print_mode}}(\@results,$class->printcols,$class->_fh);
-		#close PAGER;
-
-		#pass obj for menu
-		$class->lines(\@results) if ($class->_flag->{menu});
-	}
+	sub cdbi_search { shift->Var('table_class')->search(@_) }
+	sub cdbi_search_like { shift->Var('table_class')->search_like(@_) }
+	sub cdbi_search_regex { shift->Var('table_class')->search_regex(@_) }
+	sub cdbi_create { shift->Var('table_class')->create(@_) }
 	sub cdbi_delete {
-		my $class =  shift;
-
-		my @aliasedinput = $class->inputalias(@_);
-		my %chosenf = $class->parseselect($class->_splitter,@aliasedinput) or die "parser failed: $@";
-		$class->${\$class->_default_search}(%chosenf)->delete_all or die "delete failed: $@\n"; 
+		#td: chain
+		my $cls =  shift;
+		my @aliasedinput = @_;
+		my @results = $cls->${\$cls->Var('cdbi_search')}(@aliasedinput);
+		#my @results = $cls->sub->subHook(args=>\@aliasedinput,var=>'cdbi_search',default=>'search_abstract',caller=>$cls);
+		$cls->cdbi_delete_obj(@results);
 	}
-	sub cdbi_insert {
-		#d: inserts bookmark entry
-		my $class =  shift;
+	sub cdbi_find_or_create {
+		my ($cls,%dt)    = @_;
+		#my $hash     = ref $_[0] eq "HASH" ? shift: {@_};
+		my ($exists) = $cls->${\$cls->Var('cdbi_search')}(%dt);
+		return defined($exists) ? $exists : $cls->Var('table_class')->create(\%dt);
+	}
+	sub cdbi_multi_insert {
+		my ($cls,$file) = @_;
 
-		my %chosenf = $class->parseinsert(@_) or die "parser failed: $@";
-		my $left = $class->create({%chosenf}) or die "couldn't create correctly: $@";
-		return $left;
-	} 
+		chomp(my @lines= $cls->file2array($file));
+		for (@lines) {
+			$cls->create($cls->aliasInsert($_));
+		}	
+	}
 	sub replace {
-		my $class = shift;
-
+		#td:chain
+		my $cls = shift;
 		my $op = pop(@_);
-		my @aliasedinput = $class->inputalias(@_);
-		my @records2update = $class->get_select(@aliasedinput);
 
-		for my $rec (@records2update) {
-			for (my $j=0; $j < @{$class->printcols}; $j++) {
-				my $col= $class->printcols->[$j];
-				$_ = $rec->$col;
-				eval $op; die $@ if $@;
-				$rec->$col($_);
-			}
-		$rec->update;
-		}
+		my @records2update = $cls->${\$cls->Var('cdbi_search')}($cls->aliasInputAndSql(@_));
+		$cls->regexChangeAoH($op,@records2update);
 	}
 	sub verify_no_delim {
-		my $class = shift;
+		#td:chain
+		my $cls = shift;
 
-		my @aliasedinput = $class->inputalias(@_);
-		my @records2update = $class->get_select(@aliasedinput);
-		my $clean = $class->verify_no_delim_obj(@records2update);
-		print "No records containing delimiter found" if ($clean);
+		my @records2update = $cls->${\$cls->Var('cdbi_search')}(@_);
+		my $clean = $cls->verify_no_delim_obj(@records2update);
+		$cls->view("No records containing delimiter found") if ($clean);
 	}
 	sub cdbi_update {
-		#d: update fields in editor
-		my $class =  shift;
-		eval {require File::Temp};
-		if ($@) {
-			warn "File::Temp needed for this function ";
-		}	
-		else {
-			my (undef,$tempfile) = File::Temp::tempfile();
-			my @aliasedinput = $class->inputalias(@_);
-			my @records2update = $class->get_select(@aliasedinput);
+		#td:chain
+		my $cls =  shift;
+		#$cls->cdbi_update_obj($cls->${\$cls->Var('cdbi_search')}(@_));
+		$cls->cdbi_update_obj($cls->search_abstract(@_));
+	}
+	##$result obj
+	sub cdbi_update_obj {
+		my ($cls,@records2update) = @_;
+		$cls->sub->_require('File::Temp');
+		do {warn("File::Temp"); return} if ($@);
+		my (undef,$tempfile) = File::Temp::tempfile();
+		#$tempfile = 'ya';
 
-			if ($class->_flag->{safe_update}) {
-				my $clean = $class->verify_no_delim_obj(@records2update);
-				return if (not $clean);
-			}
+		if ($cls->Flag('safe_update')) {
+			my $clean = $cls->verify_no_delim_obj(@records2update);
+			return if (not $clean);
+		}
 
-			$class->printtofile($tempfile,@records2update);
+		$cls->printtofile($tempfile,@records2update);
 
-			my $modify = $class->modify_file($tempfile);
-			#shift off commented lines
-			$class->update_from_file($tempfile,@records2update) if ($modify);
-		}	
-	} 
-	##functions whose input are objects
+		#only for changed rec
+		my @original_lines = $cls->file2array($tempfile)
+			if ($cls->Flag('only_modified'));
+
+		my $modify = $cls->modify_file($tempfile);
+
+		#only update changed records
+		if ($cls->Flag('only_modified')) {
+			my @new_lines = $cls->file2array($tempfile);
+			#shift off columns line
+			shift(@new_lines); shift(@original_lines);
+
+			my ($modified_lines,$num) = ([],[]);
+			($modified_lines,$num) = $cls->uniqueInArrays(\@new_lines,\@original_lines);
+			#exit early if nothing to modify
+			if (@$modified_lines == 0) { $modify = 0; last }
+
+			#write new file
+			$cls->View->file($tempfile,join("\n",@$modified_lines));
+			@records2update = $cls->sub->parseNum(join(',',@$num),@records2update);
+		}
+
+		$cls->update_from_file($tempfile,@records2update) if ($modify);
+	}
 	sub verify_no_delim_obj {
-		my ($class,@records) = @_;
+		my ($cls,@records) = @_;
 
 		my @unclean_records =
-		$class->check_for_regex($class->_delim->{display},@records);
-		#$class->check_for_regex('a',@records);
+		$cls->check_for_regex($cls->Var('field_delimiter'),@records);
+		#$cls->check_for_regex('a',@records);
 
 		if (defined @unclean_records) {
-			print "The following are records containing the delimiter '",
-			$class->_delim->{display},"'\n\n";
-			$class->print2darr(\@unclean_records,$class->printcols,'STDOUT');
+			$cls->view( "The following are records containing the delimiter '",
+			$cls->Var('field_delimiter'),"':\n\n");
+			$cls->View->objAoH(\@unclean_records,$cls->Var('action_columns'));
 			return 0;
 		}
 		#passed successfully
 		return 1;
-	}	
-	sub delete_obj {
-		my $proto = shift;
-		my $class =  ref $proto || $proto;
-
+	}
+	sub cdbi_delete_obj {
+		my $class =  shift;
 		for (@_) { $_->delete; }
 	}
-	sub display_obj {
-		my $class =  shift;
-		$class->${\$class->_alias_print->{$class->_print_mode}}(\@_,$class->printcols,$class->_fh);
-		#$class->print2darr(\@_,$class->printcols,'STDOUT');
+#$dbh commands: could be used in DBI
+	sub display_table_list {
+		my ($class,$dbh) = @_;
+		$class->print_horizontal_numbered_list("Database's tables are ",[$class->get_table_list($dbh)]); 
 	}
-	sub update_obj {
-		#t:menu
-		my $class =  shift;
-		my @records2update = @_;
+	sub print_dbi_log {
+		my ($cls) = @_;
+		my $dbh =  $cls->cdbiDbh;
+		$cls->view($dbh->{Profile}->format);
+	}
+	sub clear_dbi_log {
+		my ($cls) = @_;
+		my $dbh =  $cls->cdbiDbh;
+		$dbh->{Profile}->{Data}=undef;
+	}
+	sub set_dbi_log_level{
+		my ($cls,$num) = @_;
+		my $dbh =  $cls->cdbiDbh;
 
-		eval {require File::Temp};
-		if ($@) {
-			warn "File::Temp needed for this function ";
+		if ($num > 15 or $num < -15) {
+			warn" given log level out of -15 to 15 range";
 		}	
-		else {
-			my (undef,$tempfile) = File::Temp::tempfile();
-			#h: prevent printing numbering
-			$class->_flag->{menu}=0;
-			$class->printtofile($tempfile,@records2update);
-			my $modify = $class->modify_file($tempfile);
+		else { $dbh->{Profile} = $num; }
+	}
+	#$dbh = (defined $dbh) ? $cls->idToObj($dbh) : $cls->cdbiDbh;
+	##other
+	sub t_file {
+		my $cls = shift;
+		#w
+		my $file = shift || do { $cls->view("No file given.\n"); return 0 };
+		if (! -e $file) { $cls->view("File doesn't exist.\n"); return 0};
+		return 1;
+	}
+	sub cmpl_file {
+	}
+	###internal
+	sub get_table_list {
+		my ($cls,$dbh) = @_;
+		$dbh = (defined $dbh) ? $cls->idToObj($dbh) : $cls->cdbiDbh;
+		my $sth = $cls->get_table_info($dbh);
+		return warn "Driver hasn't implemented the table_info() method" unless (ref $sth);
+		my @tables =  map {$_->[2]} @{$sth->fetchall_arrayref};
+		return @tables;
+	}
+	sub get_table_info {
+		#d: displays public tables for postgres, may have to adjust &table_info per database
+		my ($class,$dbh,$table) = @_;
+		my $catalog = undef;
+		my $schema = ($class->Var('db') eq "postgres") ? 'public' : undef;
+		my $type;
+		return  $dbh->table_info($catalog,$schema,$table,$type);
+	}
+1;
 
-			#shift off commented lines
-			$class->update_from_file($tempfile,@records2update) if ($modify);
-		}	
+__END__	
+
+	#unused
+	sub print2darr { 
+		#d: not used since similar fn ported to View::CLI 
+		#d: prints a two dimensional table with objects as rows and object attributes as columns
+		my $cls = shift;
+		my ($ref1,$ref2,$FH) = @_; my @row = @{$ref1}; my @columns = @{$ref2};
+		my $i;
+		no strict 'refs'; #due to TEMP symbol
+		
+		for (@row) {
+			#h:
+			if ($cls->Flag('menu')) {
+				$i++; print $FH "$i: "
+			}
+			for my $column (@columns) {
+				print $FH $_->$column;
+				print $FH $cls->Var('field_delimiter');
+			}
+			print $FH "\n";
+		}
+	}
+	##experimental
+	##has_a,has_many
+	sub cdbi_hasa {
+		my ($class,$from_class,$to_class,$column) = @_;
+		$from_class->has_a($column=>$to_class);
 	}
 	sub direct_sql {
 		#d:experimental
@@ -468,200 +540,206 @@ package Fry::Lib::CDBI::Basic;
 		$class->set_sql($sql_count=>"@_");
 		my $method = "search_$sql_count";
 		my @results = $class->$method;
-		$class->print2darr(\@results,$class->printcols,'STDOUT');
+		$class->print2darr(\@results,$class->action_columns,'STDOUT');
 	}
-1;
-
-__END__	
+	#from select: $o->has_a(path_id=>$o) if ($o->_flag->{join});
 
 =head1 NAME
 
-Basic.pm - A basic library of Class::DBI functions for use with Fry::Shell.
+Fry::Lib::CDBI::Basic - A basic library of Class::DBI functions for use with Fry::Shell.
 
 =head1 VERSION
 
-This document describes version 0.05.
+This document describes version 0.14.
 
 =head1 DESCRIPTION 
 
-This module contain functions which provide commandline interfaces to search
-methods and Class::DBI's &delete,&update,and &create methods. Also contains
-some basic functions to enable and view DBI::Profile logs.
+This module contain wrappers around Class::DBI methods for common database functions such as
+creating,deleting,inserting and updating records.  There are also some basic functions to enable and
+view DBI::Profile logs.
 
-=head1 Shell functions
+=head1 COMMANDS
 
-=over 4
+	Search
+		*search_abstract
+		*cdbi_search
+		*cdbi_search_like
+		*cdbi_search_regex
+	Search based
+		cdbi_delete
+		*cdbi_update
+		*verify_no_delim
+		*replace
+		cdbi_find_or_create
+	Menu based
+		cdbi_delete_obj
+		cdbi_update_obj
+		verify_no_delim_obj
+	Debugging via DBI::Profile
+		set_dbi_log_level	
+		print_dbi_log
+		clear_dbi_log
+	Other
+		cdbi_create
+		cdbi_multi_insert
+		display_table_list
+		print_columns
 
-=item B<printcol()>: prints the columns of the current table
+	Note: Any command with a * is affected by the variable action_columns
 
-=item B<set_db_log_level($num)>: sets the log level of DBI handle;
+=head2 Search Commands
 
-=item B<print_dbi_log()>: prints the current DBI log
+These commands search and give back Class::DBI objects. 
 
-=item B<clear_dbi_log()>: clears the DBI log
+	cdbi_search(@search_term): wrapper around &Class::DBI::search
+	cdbi_search_like(@search_term): wrapper around &Class::DBI::search_like
+	cdbi_search_regex(@search_term): does regular expression searches (ie REGEXP for Mysql or ~ for Postgresql)
+	search_abstract(@search_term): wrapper around Class::DBI::AbstractSearch::search_where,
+		by default does regular expression searches, change this via
+		$cls->Var('abstract_opts')->{cmp}
 
-=item B<cdbi_insert(@search_terms)>: parses the input via __PACKAGE__->_delim->{insert} into values for each column
-
-The columns which map to the parsed values is defined via the accessor
-&insertcol. Ie if @insertcol = ('car','year') and the insert delimiter is
-',,' and your input is 'chevy,,57' then &cdbi_insert will create
-a record with car='chevy' and year='57'
-
-note: records with multi-line data can't be inserted this way 
-
-=back
-
-=head2 Search-based functions	
-
-The following are functions which perform queries with either &Class::DBI::search*
-or &Class::DBI::AbstractSearch::search_where.
-
-If Class::DBI::AbstractSearch isn't installed or the splitter matches
-&_default_splitter then the given query is performed with the
-Class::DBI search_* method specified by &_default_search.
-Otherwise &search_where	is used. See &get_select for the decision logic.
-
-Both methods split on white-space breaking up user's input to chunks
-containing a column name and value pair. This chunk is in the form:
+These commands have a common input format that supports searching a column by
+a value.  A column constraint is in the regular expression form:
 	
-	$column$splitter$operator$column_value
+	$column$splitter$operator?$column_value
 
-	$splitter:  
+The above form will be represented by $search_term in any argument
+descriptions of functions.
+$splitter is controlled by the splitter variable.  $operator is only used by
+&search_abstract and has the possible values: 
 
-		Class::DBI::search* -  is &_default_splitter accessor
-		search_where - is the &_splitter accessor
+	> :  greater than
+	>= : greater than or equal to
+	< : less than
+	<= : less than or equal to
+	= : equal to
+	!= : not equal to
 
-	$operator: 
+Like Class::DBI's search method, multiple column constraints are anded together.
+To specify multiple column constraints, separate them with white space.
 
-		Class::DBI::search* - doesn't support any
-		search_where - can be any of '>,>=,<,<=,=,!=', valid only for &search_where   
+Examples: 
 
-		if no operator is given then the default operator specified in
-		&_abstract_opts is used
+Using &search, the input 'hero=superman weakness=kryptonite' translates to
+(hero=>'superman',weakness=>'kryptonite') being passed to &search and
+the sql where part being: WHERE hero = 'superman' AND weakness = 'kryptonite'
 
-For example the arguments 'hero=superman weakness=kryptonite' translates
-to: (hero=>'superman',weakness=>'kryptonite') being passed to the search
-function.  Assuming the default for _splitter('=') and _abstract_opts
-under the generic table (TABLE) and generic columns (COLUMN1 COLUMN2
-COLUMN3 ...):
+Using &search_abstract, the input 'id=>41 module=Class::DBI' translates to 
+the sql where part being: WHERE id >= 41 AND module ~ 'Class::DBI'.
 
-=over 8
+Note: To set the columns and tables for a query look at OPTIONS under Fry::Lib::CDBI::Load.
 
-=item B<cdbi_select(@search_terms)>: prints results of query
+=head2 Search based Commands 
 
-	`cdbi_select tags=cool name=hack`  : select * from TABLE where tags ~ 'perl'
-	and name ~ 'hack'
+These commands get the results of a search and then do something with it.  The variable cdbi_search
+contains the search command called for any of these functions.  This variable is found in other CDBI
+libraries and is also an option for easily changing search types.
 
-	`-c=1-3 cdbi_select id=>20 year=<=1980` : select COLUMN1,COLUMN2,COLUMN3 from TABLE
-	where id > 20 and year <= 1980
+	cdbi_delete(@search_term): deletes result objects
+	cdbi_update(@search_term): result objects printed to a file, user changes file and objects updated
 
-note: if you don't understand -c look at section 'Option C'
-below
+		This function contains two flags, safe_update and only_modified. By
+		default, both flags are set. The safe_update flag calls &verify_no_delim_obj to
+		verify none of the results contain a display delimiter. If any are found, the command exits
+		early. For many records, this may be slow, in which case run
+		&verify_no_delim on all the objects once and then turn off the flag.
+		The only_modified flag modifies the command to only call &update on
+		objects that have been changed. With the flag off, &update would be called
+		on all objects. If you don't mind this and want to speed up the update,
+		then you can turn off the flag.
 
-=item B<cdbi_delete(@search_terms)>: deletes results found via query
+	replace(@search_term,$perl_operation): evaluates a perl operation on each column value of the results,
+	treating each value as $_
+			
+		For example if one result row had the following values:
+		'4','many','amazing','some bold punk' 
+		and you did the perl operation 's/o/a/g', the result row would be
+		converted to:
+		'4','many','amazing','same bald punk' 
 
-	`cdbi_delete name=[aA]cme` : delete from TABLE where name ~
-	'[aA]cme' 
+		note: Since $operation is distinguished from @search_terms by a
+		white space, $operation can't contain any white space.
 
-=item B<cdbi_update(@search_terms)>: prints results found via the query to
-file, user makes changes and fields updated automatically
+	verify_no_delim(@search_term): Verifies that result objects do not contain the display
+		delimiter.  Since this delimiter can be used to separate fields in a
+		file, having them in the data could result in incorrect parsing. The
+		delimiter is specified by the variable field_delimiter
 
-Note: By default, the safe_update flag option is set. This 
-prevents updating if a record containing the display delimiter is found.
-It is important that the delimiter used to separate fields
-in the file doesn't exist in the table's data. 
-Otherwise incorrect parsing and updating of records will result.
+	cdbi_find_or_create(@search_term): If no result objects found then one is created
 
-Since this is slow for many records you may want to verify all the records
-only once with &verify_no_delim.  To turn the flag off, you have to change it
-inside &_default_data. Normally, you do this via your own config but there
-currently isn't a way to define values in a hash in a config file.
+=head2 Menu based Commands
 
-=item B<replace(@search_terms,$operation)>: takes result of query and
-	evaluates perl operation on each value of the results treating each
-	value as $_
-		
-	`-c=1-4 replace description=cool s/cool/lame/g`
+ cdbi_delete_obj(@cdbi): same functionality as cdbi_delete
+ cdbi_update_obj(@cdbi): same functionality as cdbi_update
+ verify_no_delim_obj(@cdbi): same functionality as verify_no_delim
 
-	This example gets the results of the SQL statement 
-	" select COLUMN1,COLUMN2,COLUMN3,COLUMN4 from TABLE where
-	description ~ 'cool' " and then performs 's/cool/lame/g' on the
-	specified columns of each result row, treating each
-	value as $_.	
+The three menu commands take Class::DBI row objects as input. The only way to
+currently enter objects as input is via the menu option. To use these
+commands, first execute a search command with the -m option 
 
-note: Since $operation is distinguished from @search_terms by a
-white space, $operation can't contain any white space.
+	`-m search_abstract tags=goofy` 
 
-=item B<verify_no_delim(@search_terms)>: verifies that no display delimiter
-are in any of the queried records, provides an alternative to having to run
-&cdbi_update safely
+Then execute one of the menu based commands with numbers specifying which
+objects you choose from the numbered menu.  
 
-=back			
+	`cdbi_delete_obj 1-4,8-10`
 
-=head2 Menu Functions
+Why not just use the corresponding search based command? You'd use a menu
+based command when you want to pick only certain results and perform actions
+on them.
 
-The next three functions take Class::DBI row objects as input. The most common way
-to pass these on is by first executing cdbi_select with the parse_mode= menu ('-m
-cdbi_select tags=goofy') and then executing one of the following functions with numbers specifying
-which objects you choose from the numbered menu. See handyshell.pl in the samples directory
-for more about menu parsing mode.
+=head2 Debugging via DBI::Profile.
 
-=over 8
+There are three commands that wrap around DBI::Profile that manage benchmark
+data useful in debugging DBI statements, set_dbi_log_level, print_dbi_log and
+clear_dbi_log. These commands respectively set the log level (which is between
+-15 and 15), print the current log, and clear the log. To enable debugging,
+you must first set a log level via &set_dbi_log_level. See DBI::Profile for
+more details.
 
-=item B<display_obj(@row_objects)>: prints chosen rows
 
-=item B<delete_obj(@row_objects)>: deletes chosen rows 
+=head2 Other Commands
 
-=item B<update_obj(@row_objects)>: updates chosen rows via file as with &cdbi_update
+	cdbi_create(($value$delim)+): wrapper around &Class::DBI::create. &cdbi_create uses
+		&aliasInsert to parse the input into values for the table's columns. The
+		columns which map to the parsed values are defined via the variable insert_columns.
+		Ie if @insert_columns = ('car','year') and the insert delimiter is ',,' and your
+		input is 'chevy,,57' then &create will create a record with car='chevy' and
+		year='57'
 
-=back
-	
-=head1 Global data
+		note: records with multi-line data can't be inserted this way 
 
-Here's a brief description of this module's global data:
+	cdbi_multi_insert($file): same input format as &cdbi_create,reads several lines from
+		file and inserts them as new records
+	display_table_list(): lists tables in the database
+	print_columns(): prints the current table's columns
 
-	_editor: sets the editor used by &cdbi_update
-	_splitter: separates column from its value in arguments of search-based functions and used
+=head1 Library Variables
+
+	editor: sets the editor used by &cdbi_update
+	splitter: separates column from its value in arguments of search-based functions and used
 		for &Class::DBI::AbstractSearch::search_where searches	
-	_default_splitter: same as above except used for Class::DBI::search* searches
-	_default_search: Class::DBI search function called when _default_splitter appears in search functions
-		possibilites are search,search_like and search_regex
-	_abstract_opts: optional parameters passed to &Class::DBI:AbstractSearch::search_where
-	_alias_print: hash mapping aliases to print functions
-	_print_mode: current print alias used by _alias_print to determine current print mode,
-		used by &cdbi_select
-	_delim: hash with the following keys:
-		display: delimits column values in table row printed out by &print2darr, also
-			delimits column values when editing records in file with &cdbi_update
+	abstract_opts: optional parameters passed to &Class::DBI:AbstractSearch::search_where
+	delim: hash with the following keys:
+		display: delimits column values when editing records in file with &cdbi_update
 		insert: delimits values when using &cdbi_insert
+		tag: delimits values used in CDBI::Tags library.
+	insert_columns(\@): implicit order of columns for 
 
-=head1 Print Modes
-
-Currently there are two main print modes (functions): text table and normal
-Normal is on by default and simply delimits each column with ',,'  and row with "\n" by default.
-Text table mode prints results as an aligned text table. I don't recommend this mode for a large
-query as it has loop through the results beforehand to determine proper table formatting. To change
-modes from the commandline you could specify '-P=t' as an option. To add another printing mode add
-the alias to the accessor &_alias_print.
-
-=head1 Handy Shortcuts
+=head1 Miscellaneous
 
 =head2 Input Aliasing
 
 If there are queries you do often then you can alias them to an even shorter command via
-&inputalias. The default &inputalias aliases 'a' to returning all rows of a table and replaces
+&aliasInput. The default &aliasInput aliases 'a' to returning all rows of a table and replaces
 anything matching /c\d/ with the corresponding column.
 
-=head2 Option C
+=head2 Changing Output Format
 
-This option quickly specifes which columns to view by column numbers.
-Columns are numbered in their order in a table. To view a numbered list of the
-current table's columns type 'printcol'. For a table with
-columns (id,name,author,book,year): 
-
-	-c=1-3  : specifies columns id,name,author
-	-c=1,4  : specifies columns id,book  
-	-c=1-2,5 : specifies columns id,name,year
+Via the subhook viewsub, it's possible to choose your own subroutine to format
+your output. By default all search results are displayed using
+&View::CLI::objAoH. If you want an aligned output similar to most database
+shells, use &printTextTable ie (-v=tt s id=48).
 
 =head1 Writing Class::DBI Libraries
 
@@ -669,30 +747,31 @@ Make sure you've read Fry::Shell's 'Writing Libraries' section.
 
 When writing a Class::DBI library:
 
-	1. Define 'CDBI::BDBI' as dependent module in your &_default_data.
-	2. Refer to Fry::Lib::CDBI::BDBI for a list of core Class::DBI global data
+	1. Define 'CDBI::Load' as dependent module in your &_default_data.
+	2. Refer to Fry::Lib::CDBI::Load for a list of core Class::DBI global data
 	to use in your functions.
 
-I encourage not only wrapper libraries around Class::DBI::* modules but any DBI
-modules. Even table-specific libraries are welcome as I'll soon be releasing
-libraries that generate outlines from a specific table format.
+I encourage not only wrapper libraries around Class::DBI::* modules but any DBI modules. Even
+libraries that use tables of a specific schema are welcome (see Fry::Lib::CDBI::Tags).
 
 =head1 Suggested Modules
 
-Three functions are dependent on external modules. Since their requirements are wrapped in
-an eval, the functions fail safely.
+Three functions are dependent on external modules. 
+Since their require statements are wrapped in
+an eval, the functions fail safely if not found.
 
 	&cdbi_update: File::Temp
-	&cdbi_select: Class::DBI::AbstractSearch
+	&search_abstract: Class::DBI::AbstractSearch
 	&print_text_table: Text::Reform
 
 =head1 See Also	
 
 L<Fry::Shell>, L<Class::DBI>
 
-=head1 TODO
+=head1 TO DO
 
- -defining relations between tables, should use Class::DBI::Loader to load tables 
+ -port old TESTS!
+ -defining relations between tables with has_*
  -provide direct SQL queries
  -support shell-like parsing of quotes to allow spaces in queries
  -specify sorting and limit of queries
